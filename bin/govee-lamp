@@ -446,7 +446,7 @@ class Device:
         self.last_error = None
         try:
             expected_ip = socket.gethostbyname(self.ip)
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
             # Unreachable like a timeout, but keep the reason so a mistyped
             # hostname is distinguishable from an offline lamp.
             self.last_error = "resolve failed: %s" % exc
@@ -577,7 +577,9 @@ class Lamp:
         return None
 
     def statuses(self, timeout=2):
-        return [(d.name, d.ip, d.status(timeout=timeout)) for d in self.devices]
+        """(name, ip, state, error) per device; error says why state is None."""
+        return [(d.name, d.ip, d.status(timeout=timeout), d.last_error)
+                for d in self.devices]
 
     def colors(self, rgbs, force=False):
         """Give each device its own colour, in device order."""
@@ -2218,9 +2220,9 @@ def cmd_devices(cfg, args):
         print("no devices. Run: govee-lamp devices scan")
         return 1
     lamp = Lamp(cfg)
-    live = {ip: st for _, ip, st in lamp.statuses(timeout=2)}
+    live = {ip: (st, err) for _, ip, st, err in lamp.statuses(timeout=2)}
     for d in devs:
-        st = live.get(d.get("ip"))
+        st, err = live.get(d.get("ip"), (None, None))
         print("  %-20s %-15s %-7s %-9s %s" % (
             d.get("name", "?"), d.get("ip", "?"), d.get("sku", "?"),
             "enabled" if d.get("enabled", True) else "disabled",
@@ -2228,7 +2230,7 @@ def cmd_devices(cfg, args):
                                            st.get("color", {}).get("g", 0),
                                            st.get("color", {}).get("b", 0))),
                                   st.get("onOff"), st.get("brightness")))
-            if st else "SILENT"))
+            if st else ("UNRESOLVED (%s)" % err if err else "SILENT")))
     return 0
 
 
@@ -2278,19 +2280,18 @@ def cmd_json(cfg, args):
         per = fleet.statuses(timeout=2)
     elif fleet.devices:
         d = fleet.devices[0]
-        per = [(d.name, d.ip, d.status(timeout=2))]
-        per += [(x.name, x.ip, None) for x in fleet.devices[1:]]
+        per = [(d.name, d.ip, d.status(timeout=2), d.last_error)]
+        per += [(x.name, x.ip, None, None) for x in fleet.devices[1:]]
     else:
         per = []
-    live = next((st for _, _, st in per if st), None)
+    live = next((st for _, _, st, _ in per if st), None)
     col = (live or {}).get("color", {}) or {}
     out = {
         "name": cfg.get("name", "Lamp"),
         "mode": cfg.get("mode", "theme"),
         "modes": list(MODES),
         "reachable": bool(live),
-        "devices": [_device_json(n, i, st, d.last_error)
-                    for (n, i, st), d in zip(per, fleet.devices)],
+        "devices": [_device_json(n, i, st, err) for n, i, st, err in per],
         "deviceCount": len(fleet.devices),
         "probedAll": "--all" in args,
         "on": bool((live or {}).get("onOff", 0)),
@@ -2444,13 +2445,15 @@ def cmd_status(cfg, args):
     print("palette       : %s" % " ".join(rgb_hex(c) for c in theme_colors()))
     print("effect        : %s" % ("running (pid %d)" % pid if pid else "none"))
     ok = False
-    for name, ip, st in lamp.statuses(timeout=2):
+    for name, ip, st, err in lamp.statuses(timeout=2):
         if st:
             ok = True
             c = st.get("color", {})
             print("  %-18s %-15s %s  on=%s brightness=%s" % (
                 name, ip, rgb_hex((c.get("r", 0), c.get("g", 0), c.get("b", 0))),
                 st.get("onOff"), st.get("brightness")))
+        elif err:
+            print("  %-18s %-15s UNRESOLVED (%s)" % (name, ip, err))
         else:
             print("  %-18s %-15s SILENT (LAN Control off, wrong ip, or ufw udp/4002)"
                   % (name, ip))
