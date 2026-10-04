@@ -297,6 +297,21 @@ def theme_stamp():
 # ---------------------------------------------------------------- transport
 
 
+def _reply_data(packet, command):
+    """Ignore unrelated commands and malformed envelopes on the shared port."""
+    try:
+        envelope = json.loads(packet.decode())
+    except (ValueError, UnicodeError):
+        return None
+    if not isinstance(envelope, dict):
+        return None
+    msg = envelope.get("msg")
+    if not isinstance(msg, dict) or msg.get("cmd") != command:
+        return None
+    data = msg.get("data")
+    return data if isinstance(data, dict) else None
+
+
 class _RecvLock:
     """Serialise everything that binds UDP 4002.
 
@@ -421,6 +436,11 @@ class Device:
             return self._status_locked(timeout)
 
     def _status_locked(self, timeout):
+        # Resolve once so hostname configs still match recvfrom's numeric IP.
+        try:
+            expected_ip = socket.gethostbyname(self.ip)
+        except OSError:
+            return None  # unresolvable host reads as unreachable, like a timeout
         rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         rx.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
@@ -440,13 +460,16 @@ class Device:
                     self._send({"msg": {"cmd": "devStatus", "data": {}}})
                     asked = time.time()
                 try:
-                    data, _ = rx.recvfrom(4096)
+                    data, addr = rx.recvfrom(4096)
                 except socket.timeout:
                     continue
-                try:
-                    return json.loads(data.decode())["msg"]["data"]
-                except (ValueError, KeyError):
+                # A delayed reply from a previous probe can arrive after the
+                # receive lock changes hands. It must not impersonate this lamp.
+                if addr[0] != expected_ip:
                     continue
+                body = _reply_data(data, "devStatus")
+                if body is not None:
+                    return body
         finally:
             rx.close()
         return None
@@ -637,9 +660,8 @@ def _discover_locked(cfg, timeout):
                 data, addr = rx.recvfrom(4096)
             except socket.timeout:
                 continue
-            try:
-                body = json.loads(data.decode())["msg"]["data"]
-            except (ValueError, KeyError):
+            body = _reply_data(data, "scan")
+            if body is None:
                 continue
             body.setdefault("ip", addr[0])
             found[addr[0]] = body

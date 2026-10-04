@@ -250,6 +250,16 @@ modes out of eight.
 
 ## Notes
 
+### Testing the LAN transport
+
+Run `python3 -m unittest discover -s tests -v`. The tests use ephemeral UDP
+ports on loopback and a temporary state directory; no Govee hardware or
+third-party Python packages are required. They cover replies from the wrong
+lamp, interleaved scan/status responses, malformed envelopes, and discovery
+of multiple devices.
+
+### Plugin implementation
+
 - `KeyboardPanel` is a `PanelWindow` and its content must be nested inside it;
   a bare `ColumnLayout` under `Panel` renders into the bar itself.
 - Do not name the panel file `Panel.qml`: it inherits `Panel`, and the type
