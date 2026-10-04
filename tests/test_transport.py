@@ -117,7 +117,7 @@ class TransportTests(unittest.TestCase):
         for packet in packets:
             with self.subTest(packet=packet):
                 # Inject immediately after the request; reception stays real UDP.
-                def send(_payload):
+                def send(_payload, ip=None):
                     self.server.sendto(packet, ("127.0.0.1", self.reply_port))
                     self.server.sendto(reply("devStatus", STATUS),
                                        ("127.0.0.1", self.reply_port))
@@ -161,9 +161,44 @@ class TransportTests(unittest.TestCase):
 
     def test_status_unresolvable_host_reads_as_unreachable(self):
         with patch.object(lamp.socket, "gethostbyname",
-                          side_effect=socket.gaierror("no such host")):
+                          side_effect=socket.gaierror("no such host")) as resolve, \
+                patch.object(self.device, "_send") as send:
             self.assertIsNone(self.device.status(timeout=0.05))
+        resolve.assert_called_once_with("127.0.0.1")
+        send.assert_not_called()
         self.assertEqual(self.requests, [])
+        self.assertIn("resolve failed", self.device.last_error)
+        self.assertIn("no such host", self.device.last_error)
+
+    def test_status_clears_last_error_after_successful_probe(self):
+        self.device.last_error = "resolve failed: stale"
+        self.respond([(self.server, reply("devStatus", STATUS))])
+        self.assertEqual(self.device.status(timeout=0.1), STATUS)
+        self.assertIsNone(self.device.last_error)
+
+    def test_device_json_reports_resolve_error_additively(self):
+        self.assertNotIn("error", lamp._device_json("lamp", "h", None))
+        self.assertEqual(
+            lamp._device_json("lamp", "h", None, "resolve failed: x")["error"],
+            "resolve failed: x")
+
+    def test_status_sends_to_the_resolved_address(self):
+        self.device.ip = "lamp.test"
+        self.respond([(self.server, reply("devStatus", STATUS))])
+        with patch.object(lamp.socket, "gethostbyname",
+                          return_value="127.0.0.1") as resolve:
+            self.assertEqual(self.device.status(timeout=0.1), STATUS)
+        resolve.assert_called_once_with("lamp.test")
+        self.assertEqual(self.requests[:1], ["devStatus"])
+
+    def test_status_rejects_reply_from_other_than_the_resolved_address(self):
+        # The name resolves to 127.0.0.1 (where the fake lamp listens), but the
+        # reply comes from 127.0.0.2, so it must not be accepted.
+        self.device.ip = "lamp.test"
+        self.respond([(self.other, reply("devStatus", STATUS))])
+        with patch.object(lamp.socket, "gethostbyname", return_value="127.0.0.1"):
+            self.assertIsNone(self.device.status(timeout=0.05))
+        self.assertEqual(self.requests[:1], ["devStatus"])
 
     def test_discovery_does_not_admit_status_only_sender(self):
         self.respond([(self.server, reply("devStatus", STATUS))])

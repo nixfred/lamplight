@@ -351,15 +351,19 @@ class Device:
         self._last_send = 0.0
         self._last_rgb = None
         self._last_bright = None
+        self.last_error = None  # why the last status() probe returned None, if known
 
-    def _send(self, payload):
-        if not self.ip:
+    def _send(self, payload, ip=None):
+        # `ip` pins the destination to an address the caller already resolved,
+        # so a status probe sends to the same address it later matches replies from.
+        ip = ip or self.ip
+        if not ip:
             return
         # Never exceed the rate the lamp was measured to handle.
         gap = (1.0 / MAX_HZ) - (time.time() - self._last_send)
         if gap > 0:
             time.sleep(gap)
-        self.sock.sendto(json.dumps(payload).encode(), (self.ip, SEND_PORT))
+        self.sock.sendto(json.dumps(payload).encode(), (ip, SEND_PORT))
         self._last_send = time.time()
 
     def color(self, rgb, force=False):
@@ -436,11 +440,17 @@ class Device:
             return self._status_locked(timeout)
 
     def _status_locked(self, timeout):
-        # Resolve once so hostname configs still match recvfrom's numeric IP.
+        # Resolve once per probe: this address is both where the request goes and
+        # the only sender whose reply is accepted, so a hostname that maps to
+        # several or changing addresses cannot make the two disagree.
+        self.last_error = None
         try:
             expected_ip = socket.gethostbyname(self.ip)
-        except OSError:
-            return None  # unresolvable host reads as unreachable, like a timeout
+        except OSError as exc:
+            # Unreachable like a timeout, but keep the reason so a mistyped
+            # hostname is distinguishable from an offline lamp.
+            self.last_error = "resolve failed: %s" % exc
+            return None
         rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         rx.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
@@ -457,7 +467,8 @@ class Device:
                 # 20 Hz the lamp will drop the odd devStatus, and a single
                 # unanswered request would otherwise look like "lamp offline".
                 if time.time() - asked > 0.8:
-                    self._send({"msg": {"cmd": "devStatus", "data": {}}})
+                    self._send({"msg": {"cmd": "devStatus", "data": {}}},
+                               ip=expected_ip)
                     asked = time.time()
                 try:
                     data, addr = rx.recvfrom(4096)
@@ -2239,10 +2250,10 @@ def cmd_gauge_source(cfg, args):
     return 0
 
 
-def _device_json(name, ip, st):
+def _device_json(name, ip, st, error=None):
     """One device's state, flattened for the bar plugin."""
     c = (st or {}).get("color") or {}
-    return {
+    out = {
         "name": name,
         "ip": ip,
         "reachable": bool(st),
@@ -2250,6 +2261,9 @@ def _device_json(name, ip, st):
         "brightness": (st or {}).get("brightness", 0),
         "color": rgb_hex((c.get("r", 0), c.get("g", 0), c.get("b", 0))) if st else None,
     }
+    if error:
+        out["error"] = error  # additive: only present when a probe failed with a known reason
+    return out
 
 
 def cmd_json(cfg, args):
@@ -2275,7 +2289,8 @@ def cmd_json(cfg, args):
         "mode": cfg.get("mode", "theme"),
         "modes": list(MODES),
         "reachable": bool(live),
-        "devices": [_device_json(n, i, st) for n, i, st in per],
+        "devices": [_device_json(n, i, st, d.last_error)
+                    for (n, i, st), d in zip(per, fleet.devices)],
         "deviceCount": len(fleet.devices),
         "probedAll": "--all" in args,
         "on": bool((live or {}).get("onOff", 0)),
