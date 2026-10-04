@@ -256,7 +256,11 @@ Run `python3 -m unittest discover -s tests -v`. The tests use ephemeral UDP
 ports on loopback and a temporary state directory; no Govee hardware or
 third-party Python packages are required. They cover replies from the wrong
 lamp, interleaved scan/status responses, malformed envelopes, and discovery
-of multiple devices.
+of multiple devices, plus hostname handling: the host is resolved once per
+status probe, the request goes to that address, and replies are accepted only
+from it. A host that does not resolve reads as unreachable: `govee-lamp status`
+and `govee-lamp devices` mark it UNRESOLVED with the resolver's error, and
+`govee-lamp json` adds an `error` field to that device.
 
 ### Plugin implementation
 
