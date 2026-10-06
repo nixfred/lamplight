@@ -2420,6 +2420,11 @@ def cmd_power(cfg, on):
     if not on:
         stop_daemon(quiet=True)
     Lamp(cfg).power(on)
+    # "off" stops the effect daemon, so "on" must bring the persisted mode back;
+    # otherwise an off/on cycle leaves the lamps on a solid colour (2026-10-06).
+    if on and cfg.get("mode", "theme") != "off":
+        subprocess.run(["systemctl", "--user", "restart", UNIT],
+                       capture_output=True, timeout=30)
     print("turned %s" % ("on" if on else "off"))
     return 0
 
