@@ -139,6 +139,25 @@ def hsv_rgb(h, s, v):
 # ---------------------------------------------------------------- theme
 
 
+DEBUG_LOG = os.path.expanduser("~/.cache/lamplight/debug.log")
+_DEBUG = [None]
+
+
+def dbg(kind, **kw):
+    """JSONL debug trail; on only while ~/.cache/lamplight/debug.on exists."""
+    if _DEBUG[0] is None or time.time() - _DEBUG[0][1] > 5:
+        _DEBUG[0] = (os.path.exists(os.path.dirname(DEBUG_LOG) + "/debug.on"),
+                     time.time())
+    if not _DEBUG[0][0]:
+        return
+    try:
+        with open(DEBUG_LOG, "a") as f:
+            f.write(json.dumps(dict(t=round(time.time(), 2), kind=kind, **kw),
+                               default=str) + "\n")
+    except OSError:
+        pass
+
+
 def load_palette():
     """Read the active Omarchy theme's colors.toml into {name: (r,g,b)}."""
     palette = {}
@@ -365,6 +384,7 @@ class Device:
             time.sleep(gap)
         self.sock.sendto(json.dumps(payload).encode(), (ip, SEND_PORT))
         self._last_send = time.time()
+        dbg("send", ip=ip, payload=payload)
 
     def color(self, rgb, force=False):
         rgb = tuple(int(max(0, min(255, c))) for c in rgb)
@@ -1829,6 +1849,7 @@ def cmd_lava(cfg, args):
     playing, step, stepped = False, 0, 0.0
     looks_on = bool(cfg.get("lan_looks", True))
     look_i, look_at = -1, 0.0
+    dbg_at = 0.0
     while True:
         if looks_on and time.time() - look_at >= rotate:
             look_i, look_at = look_i + 1, time.time()
@@ -1836,8 +1857,18 @@ def cmd_lava(cfg, args):
         if playing and time.time() - stepped >= rotate:
             step, stepped = step + 1, time.time()
             theme_scene_step(cfg, lamp, theme_name(), step)
+        if time.time() - dbg_at >= 5:
+            dbg_at = time.time()
+            dbg("state", theme=theme_name(), stamp=theme_stamp(),
+                palette=distinct_colors(), cur=cur,
+                look=LOOKS[look_i % len(LOOKS)][0] if looks_on else None,
+                cfg={k: cfg.get(k) for k in ("theme_scenes", "lamp_scenes",
+                     "bar_roll", "lan_looks", "lava_period", "workspace_lava")})
+            for n_, ip_, st_, er_ in lamp.statuses(timeout=1):
+                dbg("device", name=n_, ip=ip_, state=st_, err=er_)
         if theme_stamp() != stamp:
             stamp = theme_stamp()
+            dbg("theme-change", theme=theme_name())
             prev, cur = cur, theme_lava_set(distinct_colors())
             switched = time.time()
             for d in lamp.devices:
@@ -1915,7 +1946,7 @@ def lava_set(cols, ws):
     return [viv[i] for i in pick]
 
 
-def _vivid(rgb, min_s=0.85):
+def _vivid(rgb, min_s=0.6):
     """Keep the theme's hue, lift saturation and value for LEDs.
 
     Theme palettes are tuned for screens; pastels like #cddbf4 render as
@@ -1923,6 +1954,10 @@ def _vivid(rgb, min_s=0.85):
     """
     import colorsys
     h, s, v = colorsys.rgb_to_hsv(*(c / 255.0 for c in rgb))
+    if s < 0.15:
+        # A grey has no hue; forcing saturation on it paints it a random
+        # colour (matte-black's #eaeaea came out red). Keep it white.
+        return (255.0, 255.0, 255.0) if v > 0.5 else (200.0, 200.0, 200.0)
     r, g, b = colorsys.hsv_to_rgb(h, max(s, min_s), 1.0)
     return (r * 255, g * 255, b * 255)
 
