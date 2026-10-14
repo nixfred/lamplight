@@ -1799,6 +1799,19 @@ def theme_lava_set(cols, k=4):
     return [viv[i] for i in pick]
 
 
+# LAN-only looks. The cloud scene playlist is off because it started the
+# lamps' sound; these rotate every `scene_rotate` minutes using only direct
+# colour commands, so nothing can trigger a sound.
+LOOKS = [
+    # name,     period, bar_roll, lamp pulse depth
+    ("Drift",     12.0, False, 0.00),
+    ("Tide",       6.0, True,  0.00),
+    ("Breathe",    8.0, False, 0.40),
+    ("Chase",      3.5, True,  0.00),
+    ("Aurora",    20.0, True,  0.25),
+]
+
+
 def cmd_lava(cfg, args):
     """The whole fleet rolls the theme's colours; a theme switch recolours it.
 
@@ -1814,7 +1827,12 @@ def cmd_lava(cfg, args):
     t0 = time.time()
     rotate = max(1.0, _num(cfg.get("scene_rotate", 10), 10)) * 60
     playing, step, stepped = False, 0, 0.0
+    looks_on = bool(cfg.get("lan_looks", True))
+    look_i, look_at = -1, 0.0
     while True:
+        if looks_on and time.time() - look_at >= rotate:
+            look_i, look_at = look_i + 1, time.time()
+            print("look -> %s" % LOOKS[look_i % len(LOOKS)][0], flush=True)
         if playing and time.time() - stepped >= rotate:
             step, stepped = step + 1, time.time()
             theme_scene_step(cfg, lamp, theme_name(), step)
@@ -1856,8 +1874,12 @@ def cmd_lava(cfg, args):
         k = min(1.0, (time.time() - switched) / 1.5)
         sets = [(1 - k, prev), (k, cur)] if prev and k < 1.0 else [(1.0, cur)]
         roll = bool(cfg.get("bar_roll", False))
-        lava_frame(lamp, sets, time.time() - t0, period, cfg_roll=roll,
-                   bars_set=None if roll else theme_lava_set(distinct_colors(), 6))
+        pulse, per = 0.0, period
+        if looks_on:
+            _, per, roll, pulse = LOOKS[look_i % len(LOOKS)]
+        lava_frame(lamp, sets, time.time() - t0, per, cfg_roll=roll,
+                   bars_set=None if roll else theme_lava_set(distinct_colors(), 6),
+                   pulse=pulse)
         time.sleep(1.0 / fps)
 
 
@@ -1905,7 +1927,7 @@ def _vivid(rgb, min_s=0.85):
     return (r * 255, g * 255, b * 255)
 
 
-def lava_frame(lamp, sets, t, period, cfg_roll=True, bars_set=None):
+def lava_frame(lamp, sets, t, period, cfg_roll=True, bars_set=None, pulse=0.0):
     """Paint one frame of the rolling gradient.
 
     Segmented units get a diagonal band that rolls along their segments with a
@@ -1966,7 +1988,11 @@ def lava_frame(lamp, sets, t, period, cfg_roll=True, bars_set=None):
                     frame.append(scale(c, blob))
                 d.segment_colors(frame)
             elif not getattr(d, "scene", None):
-                d.color(at(roll + phase))
+                c = at(roll + phase)
+                if pulse:
+                    c = scale(c, 1.0 - pulse * (0.5 + 0.5 * math.sin(
+                        2 * math.pi * t / 6.0 + phase * 4)))
+                d.color(c)
         except OSError:
             pass
 
