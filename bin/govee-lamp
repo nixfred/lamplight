@@ -1635,6 +1635,26 @@ def theme_scene_packets(sku, colours, base="Aurora"):
     return pkts
 
 
+# Scenes that start the lamps' built-in ambient sound. LOCKED OUT: never sent.
+# Confirmed by ear (Fred, 2026-10-14): Aurora and Floating Mist; Fall was
+# silent. The rest are the same calm/nature/sleep family, banned until proven
+# silent. Add more with "scene_ban": [...] in govee-lamp.json.
+SOUND_SCENES = {
+    "Aurora", "Floating Mist",
+    "Healing", "Soothing", "Meditation", "Warm", "Joyful", "Heartbeat",
+    "Romantic", "Night Light", "Night", "Moonlight Sprinkles", "Cradle",
+    "Accompany", "Dreamland", "Sleeping", "Neon City", "Spritual",
+    "Forest", "Ocean", "Wave", "Fire", "Lake", "Waterfall", "Deep sea",
+    "Beach", "Mountain Forest", "Karst Cave", "Weeping Willow",
+    "Thunderstorm", "Sunny Rain", "Heavy Rain", "Sprinkle",
+    "Spring Shower", "Morning Mist", "Quiet", "Asleep",
+}
+
+
+def banned_scenes(cfg):
+    return SOUND_SCENES | set(cfg.get("scene_ban") or [])
+
+
 def scene_lamps_to(cfg, lamp, want):
     """Put each single-colour unit in the stock scene nearest `want`."""
     import threading
@@ -1642,6 +1662,9 @@ def scene_lamps_to(cfg, lamp, want):
         if d.segments or not getattr(d, "device_id", None):
             continue
         cat = scene_catalog(cfg, d.sku, d.device_id)
+        if cat:
+            ban = banned_scenes(cfg)
+            cat = [c for c in cat if c["name"] not in ban]
         sc = pick_scene(cat, want) if cat else None
         if not sc or getattr(d, "scene", None) == sc["name"]:
             continue
@@ -1783,8 +1806,10 @@ def theme_scene_step(cfg, lamp, theme, step):
             continue
         names = picks[1] if d.segments else picks[0]
         opts = scene_options(cfg, d.sku, d.device_id)
-        names = [n for n in names if n in opts]
+        ban = banned_scenes(cfg)
+        names = [n for n in names if n in opts and n not in ban]
         if not names:
+            d.scene = None  # nothing silent to play: LAN colours drive it
             continue
         name = names[step % len(names)]
         if getattr(d, "scene", None) == name:
