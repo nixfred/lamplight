@@ -1825,9 +1825,9 @@ def cmd_lava(cfg, args):
             for d in lamp.devices:
                 d.scene = None
             step, stepped = 0, time.time()
-            playing = bool(cfg.get("theme_scenes", True)) and \
+            playing = bool(cfg.get("theme_scenes", False)) and \
                 theme_scene_step(cfg, lamp, theme_name(), step)
-            if not playing and cfg.get("lamp_scenes", True):
+            if not playing and cfg.get("lamp_scenes", False):
                 # Real theme colours on the matrix lamps over LAN; any unit we
                 # cannot build a scene for falls back to the nearest stock one.
                 rest = []
@@ -2012,7 +2012,7 @@ def cmd_workspace(cfg, args):
         rgb = cols[(ws - 1) % len(cols)]
         lamp.fade(rgb, ms)
 
-    use_scenes = lava and bool(cfg.get("lamp_scenes", True))
+    use_scenes = lava and bool(cfg.get("lamp_scenes", False))
 
     def scene_lamps(want):
         if use_scenes:
